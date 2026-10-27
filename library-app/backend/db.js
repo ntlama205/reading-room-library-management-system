@@ -1,8 +1,28 @@
+
 import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
-dotenv.config();
-console.log('MySQL password loaded:', Boolean(process.env.DB_PASSWORD));
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
+// Find the folder where this file is saved.
+const currentFile = fileURLToPath(import.meta.url);
+const currentDirectory = path.dirname(currentFile);
+
+// Load environment settings from backend/.env.
+dotenv.config({ path: path.join(currentDirectory, '.env') });
+
+// Load the Aiven CA certificate when SSL is enabled.
+const ssl = process.env.DB_SSL === 'true'
+  ? {
+      ca: fs.readFileSync(
+        path.join(currentDirectory, 'ca.pem'),
+        'utf8'
+      )
+    }
+  : undefined;
+
+// Configure the MySQL connection.
 const config = {
   host: process.env.DB_HOST || 'localhost',
   port: Number(process.env.DB_PORT || 3306),
@@ -10,19 +30,36 @@ const config = {
   password: process.env.DB_PASSWORD || '',
   waitForConnections: true,
   connectionLimit: 10,
-  decimalNumbers: true
+  decimalNumbers: true,
+  ...(ssl ? { ssl } : {})
 };
 
-export const pool = mysql.createPool({ ...config, database: process.env.DB_NAME || 'reading_room' });
+// Connect to the selected database.
+export const pool = mysql.createPool({
+  ...config,
+  database: process.env.DB_NAME || 'reading_room'
+});
 
+// Create the required database tables.
 export async function initialiseDatabase() {
-  const database = (process.env.DB_NAME || 'reading_room').replace(/[^a-zA-Z0-9_]/g, '');
-  const connection = await mysql.createConnection(config);
-  try {
-    await connection.query(`CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-  } finally {
-    await connection.end();
+  // Create the database only when using local MySQL.
+  if (!process.env.DB_HOST?.includes('aivencloud.com')) {
+    const database = (process.env.DB_NAME || 'reading_room')
+      .replace(/[^a-zA-Z0-9_]/g, '');
+
+    const connection = await mysql.createConnection(config);
+
+    try {
+      await connection.query(
+        `CREATE DATABASE IF NOT EXISTS \`${database}\`
+         CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+      );
+    } finally {
+      await connection.end();
+    }
   }
+
+  // Create the users table.
   await pool.query(`CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(120) NOT NULL,
@@ -31,6 +68,8 @@ export async function initialiseDatabase() {
     role ENUM('admin','member') NOT NULL DEFAULT 'member',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // Create the books table.
   await pool.query(`CREATE TABLE IF NOT EXISTS books (
     id INT AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -40,6 +79,8 @@ export async function initialiseDatabase() {
     quantity INT UNSIGNED NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // Create the transactions table.
   await pool.query(`CREATE TABLE IF NOT EXISTS transactions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     book_id INT NULL,
@@ -47,8 +88,11 @@ export async function initialiseDatabase() {
     transaction_type VARCHAR(40) NOT NULL,
     quantity INT UNSIGNED NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_transaction_book FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE SET NULL
+    CONSTRAINT fk_transaction_book
+      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE SET NULL
   )`);
+
+  // Create the membership requests table.
   await pool.query(`CREATE TABLE IF NOT EXISTS membership_requests (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(120) NOT NULL,
