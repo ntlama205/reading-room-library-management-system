@@ -8,7 +8,7 @@ import Transactions from "./pages/Transactions";
 import Members from "./pages/Members";
 import Requests from "./pages/Requests";
 
-const API = "http://localhost:5000/api";
+const API = "https://reading-room-library-management-api.onrender.com/api";
 export default function App() {
   const [books, setBooks] = useState([]);
   const [users, setUsers] = useState([]);
